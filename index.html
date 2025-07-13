@@ -252,16 +252,6 @@
             color: #00ffff;
         }
 
-        .particle-bg {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: -1;
-        }
-
         @media (max-width: 768px) {
             .menu-title { font-size: 2.5rem; }
             .hud { flex-direction: column; gap: 10px; }
@@ -271,8 +261,6 @@
     </style>
 </head>
 <body>
-    <canvas class="particle-bg" id="backgroundCanvas"></canvas>
-    
     <div class="game-container">
         <div class="hud">
             <div class="stat-panel">
@@ -314,7 +302,7 @@
             </div>
         </div>
 
-        <canvas id="gameCanvas" width="1000" height="700"></canvas>
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
         
         <div class="controls-info">
             <div><strong>CONTROLS:</strong></div>
@@ -362,677 +350,622 @@
     </div>
 
     <script>
-        // Game Engine
-        class QuantumGame {
-            constructor() {
-                this.canvas = document.getElementById('gameCanvas');
-                this.ctx = this.canvas.getContext('2d');
-                this.bgCanvas = document.getElementById('backgroundCanvas');
-                this.bgCtx = this.bgCanvas.getContext('2d');
-                
-                this.setupCanvas();
-                this.initGame();
-                this.setupControls();
-                this.createBackgroundParticles();
-                this.startBackgroundAnimation();
-            }
+        // Game state
+        let gameState = 'menu';
+        let difficulty = 'medium';
+        let score = 0;
+        let level = 1;
+        let quantumEnergy = 100;
+        let coherence = 100;
+        let timeScale = 1;
+        let lastTime = performance.now();
+        let animationId = null;
 
-            setupCanvas() {
-                const updateSize = () => {
-                    const maxW = Math.min(window.innerWidth - 40, 1000);
-                    const maxH = Math.min(window.innerHeight - 200, 700);
-                    
-                    this.canvas.width = maxW;
-                    this.canvas.height = maxH;
-                    this.bgCanvas.width = window.innerWidth;
-                    this.bgCanvas.height = window.innerHeight;
-                };
-                updateSize();
-                window.addEventListener('resize', updateSize);
-            }
+        // Game objects
+        let player = {
+            x: 80, y: 300, vx: 0, vy: 0, radius: 12,
+            trail: [], wavePhase: 0, clones: []
+        };
 
-            initGame() {
-                this.gameState = 'menu';
-                this.difficulty = 'medium';
-                this.score = 0;
-                this.level = 1;
-                this.quantumEnergy = 100;
-                this.coherence = 100;
-                this.timeScale = 1;
-                
-                this.player = {
-                    x: 80, y: this.canvas.height / 2, vx: 0, vy: 0, radius: 12,
-                    trail: [], wavePhase: 0, clones: []
-                };
-                
-                this.target = {
-                    x: this.canvas.width - 80, y: this.canvas.height / 2,
-                    radius: 20, pulsePhase: 0, visible: true
-                };
-                
-                this.obstacles = [];
-                this.powerups = [];
-                this.effects = [];
-                this.backgroundParticles = [];
-                
-                this.abilities = {
-                    teleport: { cd: 0, maxCd: 3000 },
-                    slowTime: { cd: 0, maxCd: 5000, active: false, duration: 0 },
-                    shield: { cd: 0, maxCd: 4000, active: false, duration: 0 },
-                    clone: { cd: 0, maxCd: 6000 },
-                    magnet: { cd: 0, maxCd: 3500, active: false, duration: 0 },
-                    phase: { cd: 0, maxCd: 4500, active: false, duration: 0 },
-                    entangle: { cd: 0, maxCd: 5500 },
-                    collapse: { cd: 0, maxCd: 7000 }
-                };
-                
-                this.keys = {};
-                this.mouse = { x: 0, y: 0 };
-                this.lastTime = performance.now();
-                
-                this.generateLevel();
-            }
+        let target = {
+            x: 720, y: 300, radius: 20, pulsePhase: 0, visible: true
+        };
 
-            generateLevel() {
-                this.obstacles = [];
-                this.powerups = [];
-                
-                const settings = {
-                    easy: { obs: 3, pups: 3 },
-                    medium: { obs: 5, pups: 2 },
-                    hard: { obs: 8, pups: 1 }
-                }[this.difficulty];
-                
-                const obsCount = settings.obs + Math.floor(this.level * 0.5);
-                
-                // Generate obstacles
-                for (let i = 0; i < obsCount; i++) {
-                    this.obstacles.push({
-                        x: 200 + Math.random() * (this.canvas.width - 400),
-                        y: 100 + Math.random() * (this.canvas.height - 200),
-                        radius: 20 + Math.random() * 15,
-                        type: ['blackhole', 'antimatter', 'vortex'][Math.floor(Math.random() * 3)],
-                        rotation: 0,
-                        pulsePhase: Math.random() * Math.PI * 2,
-                        collapsing: false,
-                        collapseTime: 1000
-                    });
-                }
-                
-                // Generate powerups
-                for (let i = 0; i < settings.pups; i++) {
-                    this.powerups.push({
-                        x: 150 + Math.random() * (this.canvas.width - 300),
-                        y: 150 + Math.random() * (this.canvas.height - 300),
-                        radius: 15,
-                        type: ['energy', 'shield', 'speed'][Math.floor(Math.random() * 3)],
-                        rotation: 0,
-                        pulsePhase: Math.random() * Math.PI * 2
-                    });
-                }
-            }
+        let obstacles = [];
+        let powerups = [];
+        let effects = [];
+        let keys = {};
+        let mouse = { x: 0, y: 0 };
 
-            createBackgroundParticles() {
-                this.backgroundParticles = [];
-                for (let i = 0; i < 30; i++) {
-                    this.backgroundParticles.push({
-                        x: Math.random() * window.innerWidth,
-                        y: Math.random() * window.innerHeight,
-                        vx: (Math.random() - 0.5) * 0.5,
-                        vy: (Math.random() - 0.5) * 0.5,
-                        size: Math.random() * 2 + 0.5,
-                        opacity: Math.random() * 0.6 + 0.2,
-                        hue: Math.random() * 360
-                    });
-                }
-            }
+        // Abilities
+        let abilities = {
+            teleport: { cd: 0, maxCd: 3000 },
+            slowTime: { cd: 0, maxCd: 5000, active: false, duration: 0 },
+            shield: { cd: 0, maxCd: 4000, active: false, duration: 0 },
+            clone: { cd: 0, maxCd: 6000 },
+            magnet: { cd: 0, maxCd: 3500, active: false, duration: 0 },
+            phase: { cd: 0, maxCd: 4500, active: false, duration: 0 },
+            entangle: { cd: 0, maxCd: 5500 },
+            collapse: { cd: 0, maxCd: 7000 }
+        };
 
-            setupControls() {
-                // Keyboard
-                window.addEventListener('keydown', (e) => {
-                    this.keys[e.key.toLowerCase()] = true;
-                    if (this.gameState === 'playing') {
-                        const abilities = { q: 'teleport', w: 'slowTime', e: 'shield', r: 'clone', t: 'magnet', y: 'phase', u: 'entangle', i: 'collapse' };
-                        if (abilities[e.key.toLowerCase()]) this.activateAbility(abilities[e.key.toLowerCase()]);
-                        if (e.key === 'Escape') this.togglePause();
+        // Get canvas and context
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Generate level
+        function generateLevel() {
+            obstacles = [];
+            powerups = [];
+            
+            const settings = {
+                easy: { obs: 3, pups: 3 },
+                medium: { obs: 5, pups: 2 },
+                hard: { obs: 8, pups: 1 }
+            }[difficulty];
+            
+            const obsCount = settings.obs + Math.floor(level * 0.5);
+            
+            // Generate obstacles
+            for (let i = 0; i < obsCount; i++) {
+                obstacles.push({
+                    x: 200 + Math.random() * 400,
+                    y: 100 + Math.random() * 400,
+                    radius: 20 + Math.random() * 15,
+                    type: ['blackhole', 'antimatter', 'vortex'][Math.floor(Math.random() * 3)],
+                    rotation: 0,
+                    pulsePhase: Math.random() * Math.PI * 2,
+                    collapsing: false,
+                    collapseTime: 1000
+                });
+            }
+            
+            // Generate powerups
+            for (let i = 0; i < settings.pups; i++) {
+                powerups.push({
+                    x: 150 + Math.random() * 500,
+                    y: 150 + Math.random() * 300,
+                    radius: 15,
+                    type: ['energy', 'shield', 'speed'][Math.floor(Math.random() * 3)],
+                    rotation: 0,
+                    pulsePhase: Math.random() * Math.PI * 2
+                });
+            }
+        }
+
+        // Setup controls
+        function setupControls() {
+            // Keyboard
+            window.addEventListener('keydown', (e) => {
+                keys[e.key.toLowerCase()] = true;
+                if (gameState === 'playing') {
+                    const abilityMap = { 
+                        q: 'teleport', w: 'slowTime', e: 'shield', r: 'clone', 
+                        t: 'magnet', y: 'phase', u: 'entangle', i: 'collapse' 
+                    };
+                    if (abilityMap[e.key.toLowerCase()]) {
+                        activateAbility(abilityMap[e.key.toLowerCase()]);
                     }
-                });
-                
-                window.addEventListener('keyup', (e) => this.keys[e.key.toLowerCase()] = false);
-                
-                // Mouse
-                this.canvas.addEventListener('mousemove', (e) => {
-                    const rect = this.canvas.getBoundingClientRect();
-                    this.mouse.x = (e.clientX - rect.left) * (this.canvas.width / rect.width);
-                    this.mouse.y = (e.clientY - rect.top) * (this.canvas.height / rect.height);
-                });
-                
-                // Menu buttons
-                document.getElementById('startBtn').addEventListener('click', () => this.startGame());
-                document.getElementById('difficultyBtn').addEventListener('click', () => this.showDifficultyMenu());
-                document.getElementById('backBtn').addEventListener('click', () => this.showMainMenu());
-                document.getElementById('tutorialBtn').addEventListener('click', () => this.showTutorial());
-                
-                // Difficulty selection
-                document.querySelectorAll('.difficulty-card').forEach(card => {
-                    card.addEventListener('click', () => {
-                        document.querySelectorAll('.difficulty-card').forEach(c => c.classList.remove('selected'));
-                        card.classList.add('selected');
-                        this.difficulty = card.dataset.difficulty;
-                    });
-                });
-                
-                // Ability buttons
-                const abilityBtns = ['teleport', 'slowTime', 'shield', 'clone', 'magnet', 'phase', 'entangle', 'collapse'];
-                abilityBtns.forEach(ability => {
-                    document.getElementById(ability + 'Btn').addEventListener('click', () => this.activateAbility(ability));
-                });
-                
-                // Notification button
-                document.getElementById('notificationBtn').addEventListener('click', () => {
-                    document.getElementById('notification').classList.remove('show');
-                    if (this.gameState === 'gameover') this.resetGame();
-                    else if (this.gameState === 'levelcomplete') this.nextLevel();
-                });
-            }
-
-            startGame() {
-                this.gameState = 'playing';
-                this.hideMenus();
-                this.initGame();
-                this.gameLoop();
-            }
-
-            showMainMenu() {
-                document.getElementById('mainMenu').style.display = 'flex';
-                document.getElementById('difficultyMenu').style.display = 'none';
-            }
-
-            showDifficultyMenu() {
-                document.getElementById('mainMenu').style.display = 'none';
-                document.getElementById('difficultyMenu').style.display = 'flex';
-            }
-
-            showTutorial() {
-                this.showNotification('TUTORIAL', 'Use WASD or arrows to move your quantum particle. Avoid red obstacles and reach the green target. Use Q-W-E-R-T-Y-U-I for special abilities!');
-            }
-
-            hideMenus() {
-                document.getElementById('mainMenu').style.display = 'none';
-                document.getElementById('difficultyMenu').style.display = 'none';
-            }
-
-            activateAbility(ability) {
-                if (this.gameState !== 'playing') return;
-                
-                const ab = this.abilities[ability];
-                if (ab.cd > 0 || this.quantumEnergy < 25) return;
-                
-                this.quantumEnergy = Math.max(0, this.quantumEnergy - 25);
-                ab.cd = ab.maxCd;
-                
-                switch (ability) {
-                    case 'teleport':
-                        this.player.x = this.mouse.x;
-                        this.player.y = this.mouse.y;
-                        this.createEffect('teleport', this.player.x, this.player.y);
-                        break;
-                    case 'slowTime':
-                        this.timeScale = 0.3;
-                        ab.active = true;
-                        ab.duration = 2000;
-                        break;
-                    case 'shield':
-                        ab.active = true;
-                        ab.duration = 3000;
-                        break;
-                    case 'clone':
-                        this.player.clones = [];
-                        for (let i = 0; i < 3; i++) {
-                            this.player.clones.push({
-                                x: this.player.x + (Math.random() - 0.5) * 100,
-                                y: this.player.y + (Math.random() - 0.5) * 100,
-                                lifetime: 4000
-                            });
-                        }
-                        break;
-                    case 'magnet':
-                        ab.active = true;
-                        ab.duration = 3000;
-                        break;
-                    case 'phase':
-                        ab.active = true;
-                        ab.duration = 2500;
-                        break;
-                    case 'entangle':
-                        this.createEffect('entangle', this.player.x, this.player.y);
-                        break;
-                    case 'collapse':
-                        this.obstacles.forEach(obs => {
-                            const dx = obs.x - this.player.x;
-                            const dy = obs.y - this.player.y;
-                            if (Math.sqrt(dx * dx + dy * dy) < 200) {
-                                obs.collapsing = true;
-                            }
-                        });
-                        this.createEffect('collapse', this.player.x, this.player.y);
-                        break;
+                    if (e.key === 'Escape') togglePause();
                 }
-                this.updateAbilityUI();
-            }
-
-            createEffect(type, x, y) {
-                this.effects.push({
-                    x, y, type, age: 0, maxAge: 1000,
-                    particles: Array.from({ length: 10 }, () => ({
-                        x, y,
-                        vx: (Math.random() - 0.5) * 5,
-                        vy: (Math.random() - 0.5) * 5,
-                        size: Math.random() * 4 + 2,
-                        alpha: 1
-                    }))
+            });
+            
+            window.addEventListener('keyup', (e) => {
+                keys[e.key.toLowerCase()] = false;
+            });
+            
+            // Mouse
+            canvas.addEventListener('mousemove', (e) => {
+                const rect = canvas.getBoundingClientRect();
+                mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width);
+                mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height);
+            });
+            
+            // Menu buttons
+            document.getElementById('startBtn').addEventListener('click', startGame);
+            document.getElementById('difficultyBtn').addEventListener('click', showDifficultyMenu);
+            document.getElementById('backBtn').addEventListener('click', showMainMenu);
+            document.getElementById('tutorialBtn').addEventListener('click', showTutorial);
+            
+            // Difficulty selection
+            document.querySelectorAll('.difficulty-card').forEach(card => {
+                card.addEventListener('click', () => {
+                    document.querySelectorAll('.difficulty-card').forEach(c => c.classList.remove('selected'));
+                    card.classList.add('selected');
+                    difficulty = card.dataset.difficulty;
                 });
-            }
+            });
+            
+            // Ability buttons
+            const abilityBtns = ['teleport', 'slowTime', 'shield', 'clone', 'magnet', 'phase', 'entangle', 'collapse'];
+            abilityBtns.forEach(ability => {
+                document.getElementById(ability + 'Btn').addEventListener('click', () => activateAbility(ability));
+            });
+            
+            // Notification button
+            document.getElementById('notificationBtn').addEventListener('click', () => {
+                document.getElementById('notification').classList.remove('show');
+                if (gameState === 'gameover') resetGame();
+                else if (gameState === 'levelcomplete') nextLevel();
+            });
+        }
 
-            update(deltaTime) {
-                if (this.gameState !== 'playing') return;
-                
-                const dt = deltaTime * this.timeScale;
-                
-                // Update player
-                const speed = 0.4;
-                if (this.keys['w'] || this.keys['arrowup']) this.player.vy -= speed;
-                if (this.keys['s'] || this.keys['arrowdown']) this.player.vy += speed;
-                if (this.keys['a'] || this.keys['arrowleft']) this.player.vx -= speed;
-                if (this.keys['d'] || this.keys['arrowright']) this.player.vx += speed;
-                
-                this.player.vx *= 0.92;
-                this.player.vy *= 0.92;
-                
-                // Quantum uncertainty (reduced for better control)
-                const uncertainty = this.abilities.shield.active ? 0.2 : 0.8;
-                this.player.x += (Math.random() - 0.5) * uncertainty;
-                this.player.y += (Math.random() - 0.5) * uncertainty;
-                
-                this.player.x += this.player.vx * dt * 0.1;
-                this.player.y += this.player.vy * dt * 0.1;
-                
-                // Keep in bounds
-                this.player.x = Math.max(this.player.radius, Math.min(this.canvas.width - this.player.radius, this.player.x));
-                this.player.y = Math.max(this.player.radius, Math.min(this.canvas.height - this.player.radius, this.player.y));
-                
-                // Update trail
-                this.player.trail.push({ x: this.player.x, y: this.player.y, alpha: 1 });
-                if (this.player.trail.length > 15) this.player.trail.shift();
-                this.player.trail.forEach(point => point.alpha -= 0.07);
-                
-                this.player.wavePhase += dt * 0.01;
-                
-                // Update clones
-                this.player.clones.forEach((clone, i) => {
-                    clone.lifetime -= dt;
-                    if (clone.lifetime <= 0) this.player.clones.splice(i, 1);
-                });
-                
-                // Update obstacles
-                this.obstacles.forEach((obs, i) => {
-                    obs.rotation += dt * 0.002;
-                    obs.pulsePhase += dt * 0.005;
-                    if (obs.collapsing) {
-                        obs.collapseTime -= dt;
-                        obs.radius *= 0.99;
-                        if (obs.collapseTime <= 0) this.obstacles.splice(i, 1);
-                    }
-                });
-                
-                // Update powerups
-                this.powerups.forEach((pup, i) => {
-                    pup.rotation += dt * 0.003;
-                    pup.pulsePhase += dt * 0.008;
-                    
-                    // Magnet effect
-                    if (this.abilities.magnet.active) {
-                        const dx = this.player.x - pup.x;
-                        const dy = this.player.y - pup.y;
-                        const dist = Math.sqrt(dx * dx + dy * dy);
-                        if (dist < 200 && dist > 0) {
-                            pup.x += (dx / dist) * 2;
-                            pup.y += (dy / dist) * 2;
-                        }
-                    }
-                    
-                    if (this.checkCollision(this.player, pup)) {
-                        this.collectPowerup(pup);
-                        this.powerups.splice(i, 1);
-                    }
-                });
-                
-                // Update target
-                this.target.pulsePhase += dt * 0.01;
-                if (Math.random() < 0.001) this.target.visible = Math.random() < 0.9;
-                
-                // Update abilities
-                Object.keys(this.abilities).forEach(key => {
-                    const ab = this.abilities[key];
-                    if (ab.cd > 0) ab.cd = Math.max(0, ab.cd - dt);
-                    if (ab.active && ab.duration !== undefined) {
-                        ab.duration = Math.max(0, ab.duration - dt);
-                        if (ab.duration === 0) {
-                            ab.active = false;
-                            if (key === 'slowTime') this.timeScale = 1;
-                        }
-                    }
-                });
-                
-                // Update effects
-                this.effects.forEach((effect, i) => {
-                    effect.age += dt;
-                    const progress = effect.age / effect.maxAge;
-                    effect.particles.forEach(p => {
-                        p.x += p.vx * dt * 0.1;
-                        p.y += p.vy * dt * 0.1;
-                        p.alpha = 1 - progress;
-                    });
-                    if (effect.age > effect.maxAge) this.effects.splice(i, 1);
-                });
-                
-                // Check collisions
-                if (!this.abilities.phase.active && !this.abilities.shield.active) {
-                    this.obstacles.forEach(obs => {
-                        if (this.checkCollision(this.player, obs)) this.gameOver();
-                    });
-                }
-                
-                // Check target collision
-                if (this.target.visible && this.checkCollision(this.player, this.target)) {
-                    this.levelComplete();
-                }
-                
-                // Update UI
-                this.updateUI();
-                
-                // Regenerate energy
-                this.quantumEnergy = Math.min(100, this.quantumEnergy + dt * 0.02);
-                this.coherence = Math.max(60, this.coherence - dt * 0.01);
-            }
+        // Game functions
+        function startGame() {
+            gameState = 'playing';
+            hideMenus();
+            resetPlayer();
+            generateLevel();
+            gameLoop();
+        }
 
-            checkCollision(obj1, obj2) {
-                const dx = obj1.x - obj2.x;
-                const dy = obj1.y - obj2.y;
-                return Math.sqrt(dx * dx + dy * dy) < obj1.radius + obj2.radius;
-            }
+        function resetPlayer() {
+            player.x = 80;
+            player.y = 300;
+            player.vx = 0;
+            player.vy = 0;
+            player.trail = [];
+            player.clones = [];
+            target.x = 720;
+            target.y = 300;
+            target.visible = true;
+        }
 
-            collectPowerup(pup) {
-                this.score += 100;
-                switch (pup.type) {
-                    case 'energy': this.quantumEnergy = Math.min(100, this.quantumEnergy + 30); break;
-                    case 'shield': this.abilities.shield.active = true; this.abilities.shield.duration = 2000; break;
-                    case 'speed': this.coherence = Math.min(100, this.coherence + 20); break;
-                }
-                this.createEffect('collect', pup.x, pup.y);
-            }
+        function showMainMenu() {
+            document.getElementById('mainMenu').style.display = 'flex';
+            document.getElementById('difficultyMenu').style.display = 'none';
+        }
 
-            levelComplete() {
-                this.level++;
-                this.score += 500 * this.level;
-                this.gameState = 'levelcomplete';
-                this.showNotification('QUANTUM STATE ACHIEVED!', `Level ${this.level - 1} complete! Score: ${Math.floor(this.score)}`);
-            }
+        function showDifficultyMenu() {
+            document.getElementById('mainMenu').style.display = 'none';
+            document.getElementById('difficultyMenu').style.display = 'flex';
+        }
 
-            nextLevel() {
-                this.player.x = 80;
-                this.player.y = this.canvas.height / 2;
-                this.player.vx = 0;
-                this.player.vy = 0;
-                this.player.trail = [];
-                this.player.clones = [];
-                this.target.x = this.canvas.width - 80;
-                this.target.y = this.canvas.height / 2;
-                this.target.visible = true;
-                this.generateLevel();
-                this.gameState = 'playing';
-                this.gameLoop();
-            }
+        function showTutorial() {
+            showNotification('TUTORIAL', 'Use WASD or arrows to move your quantum particle. Avoid red obstacles and reach the green target. Use Q-W-E-R-T-Y-U-I for special abilities!');
+        }
 
-            gameOver() {
-                this.gameState = 'gameover';
-                this.showNotification('QUANTUM DECOHERENCE', `Wave function collapsed! Final Score: ${Math.floor(this.score)}`);
-            }
+        function hideMenus() {
+            document.getElementById('mainMenu').style.display = 'none';
+            document.getElementById('difficultyMenu').style.display = 'none';
+        }
 
-            resetGame() {
-                this.initGame();
-                this.showMainMenu();
-            }
-
-            showNotification(title, text) {
-                document.getElementById('notificationTitle').textContent = title;
-                document.getElementById('notificationText').textContent = text;
-                document.getElementById('notification').classList.add('show');
-            }
-
-            updateAbilityUI() {
-                const btns = ['teleport', 'slowTime', 'shield', 'clone', 'magnet', 'phase', 'entangle', 'collapse'];
-                btns.forEach(ability => {
-                    const btn = document.getElementById(ability + 'Btn');
-                    const ab = this.abilities[ability];
-                    btn.classList.toggle('cooldown', ab.cd > 0 || this.quantumEnergy < 25);
-                    btn.classList.toggle('active', ab.active || (ability === 'clone' && this.player.clones.length > 0));
-                });
-            }
-
-            updateUI() {
-                document.getElementById('scoreDisplay').textContent = Math.floor(this.score);
-                document.getElementById('levelDisplay').textContent = this.level;
-                document.getElementById('energyDisplay').textContent = Math.floor(this.quantumEnergy) + '%';
-                document.getElementById('quantumFill').style.width = this.quantumEnergy + '%';
-                document.getElementById('coherenceDisplay').textContent = Math.floor(this.coherence) + '%';
-            }
-
-            startBackgroundAnimation() {
-                const animate = () => {
-                    this.updateBackgroundParticles();
-                    this.renderBackgroundParticles();
-                    requestAnimationFrame(animate);
-                };
-                animate();
-            }
-
-            updateBackgroundParticles() {
-                this.backgroundParticles.forEach(p => {
-                    p.x += p.vx;
-                    p.y += p.vy;
-                    if (p.x < 0) p.x = window.innerWidth;
-                    if (p.x > window.innerWidth) p.x = 0;
-                    if (p.y < 0) p.y = window.innerHeight;
-                    if (p.y > window.innerHeight) p.y = 0;
-                    p.hue += 0.5;
-                });
-            }
-
-            renderBackgroundParticles() {
-                this.bgCtx.clearRect(0, 0, this.bgCanvas.width, this.bgCanvas.height);
-                this.backgroundParticles.forEach(p => {
-                    this.bgCtx.save();
-                    this.bgCtx.globalAlpha = p.opacity;
-                    this.bgCtx.fillStyle = `hsl(${p.hue}, 70%, 60%)`;
-                    this.bgCtx.beginPath();
-                    this.bgCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-                    this.bgCtx.fill();
-                    this.bgCtx.restore();
-                });
-            }
-
-            render() {
-                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-                if (this.gameState !== 'playing') return;
-                
-                // Player trail
-                this.player.trail.forEach(point => {
-                    if (point.alpha > 0) {
-                        this.ctx.save();
-                        this.ctx.globalAlpha = point.alpha;
-                        this.ctx.fillStyle = '#00ffff';
-                        this.ctx.beginPath();
-                        this.ctx.arc(point.x, point.y, this.player.radius * 0.3, 0, Math.PI * 2);
-                        this.ctx.fill();
-                        this.ctx.restore();
-                    }
-                });
-                
-                // Player wave function
-                this.ctx.save();
-                this.ctx.globalAlpha = 0.3;
-                this.ctx.strokeStyle = '#00ffff';
-                this.ctx.lineWidth = 2;
-                this.ctx.beginPath();
-                this.ctx.arc(this.player.x, this.player.y, this.player.radius + 10 + Math.sin(this.player.wavePhase) * 5, 0, Math.PI * 2);
-                this.ctx.stroke();
-                this.ctx.restore();
-                
-                // Player
-                const gradient = this.ctx.createRadialGradient(this.player.x, this.player.y, 0, this.player.x, this.player.y, this.player.radius);
-                gradient.addColorStop(0, '#ffffff');
-                gradient.addColorStop(0.7, '#00ffff');
-                gradient.addColorStop(1, 'transparent');
-                this.ctx.fillStyle = gradient;
-                this.ctx.beginPath();
-                this.ctx.arc(this.player.x, this.player.y, this.player.radius, 0, Math.PI * 2);
-                this.ctx.fill();
-                
-                // Shield effect
-                if (this.abilities.shield.active) {
-                    this.ctx.save();
-                    this.ctx.globalAlpha = 0.6;
-                    this.ctx.strokeStyle = '#ffff00';
-                    this.ctx.lineWidth = 3;
-                    this.ctx.beginPath();
-                    this.ctx.arc(this.player.x, this.player.y, this.player.radius + 15, 0, Math.PI * 2);
-                    this.ctx.stroke();
-                    this.ctx.restore();
-                }
-                
-                // Clones
-                this.player.clones.forEach(clone => {
-                    this.ctx.save();
-                    this.ctx.globalAlpha = clone.lifetime / 4000 * 0.6;
-                    this.ctx.fillStyle = '#ff00ff';
-                    this.ctx.beginPath();
-                    this.ctx.arc(clone.x, clone.y, 8, 0, Math.PI * 2);
-                    this.ctx.fill();
-                    this.ctx.restore();
-                });
-                
-                // Obstacles
-                this.obstacles.forEach(obs => {
-                    this.ctx.save();
-                    this.ctx.translate(obs.x, obs.y);
-                    this.ctx.rotate(obs.rotation);
-                    
-                    if (obs.collapsing) this.ctx.globalAlpha = obs.collapseTime / 1000;
-                    
-                    const grad = this.ctx.createRadialGradient(0, 0, 0, 0, 0, obs.radius);
-                    grad.addColorStop(0, '#000000');
-                    grad.addColorStop(0.6, '#330000');
-                    grad.addColorStop(1, '#ff0000');
-                    this.ctx.fillStyle = grad;
-                    this.ctx.beginPath();
-                    this.ctx.arc(0, 0, obs.radius, 0, Math.PI * 2);
-                    this.ctx.fill();
-                    
-                    this.ctx.strokeStyle = '#ff6600';
-                    this.ctx.lineWidth = 2;
-                    this.ctx.beginPath();
-                    this.ctx.arc(0, 0, obs.radius + 5 + Math.sin(obs.pulsePhase) * 3, 0, Math.PI * 2);
-                    this.ctx.stroke();
-                    this.ctx.restore();
-                });
-                
-                // Powerups
-                this.powerups.forEach(pup => {
-                    this.ctx.save();
-                    this.ctx.translate(pup.x, pup.y);
-                    this.ctx.rotate(pup.rotation);
-                    
-                    const colors = { energy: '#00ffff', shield: '#ffff00', speed: '#ff8000' };
-                    const size = pup.radius + Math.sin(pup.pulsePhase) * 3;
-                    
-                    const grad = this.ctx.createRadialGradient(0, 0, 0, 0, 0, size);
-                    grad.addColorStop(0, '#ffffff');
-                    grad.addColorStop(0.7, colors[pup.type]);
-                    grad.addColorStop(1, 'transparent');
-                    this.ctx.fillStyle = grad;
-                    this.ctx.beginPath();
-                    this.ctx.arc(0, 0, size, 0, Math.PI * 2);
-                    this.ctx.fill();
-                    this.ctx.restore();
-                });
-                
-                // Target
-                if (this.target.visible) {
-                    const size = this.target.radius + Math.sin(this.target.pulsePhase) * 5;
-                    
-                    const grad = this.ctx.createRadialGradient(this.target.x, this.target.y, 0, this.target.x, this.target.y, size * 2);
-                    grad.addColorStop(0, 'rgba(0, 255, 0, 0.8)');
-                    grad.addColorStop(0.5, 'rgba(0, 255, 0, 0.3)');
-                    grad.addColorStop(1, 'transparent');
-                    this.ctx.fillStyle = grad;
-                    this.ctx.beginPath();
-                    this.ctx.arc(this.target.x, this.target.y, size * 2, 0, Math.PI * 2);
-                    this.ctx.fill();
-                    
+        function activateAbility(ability) {
+            if (gameState !== 'playing') return;
+            
+            const ab = abilities[ability];
+            if (ab.cd > 0 || quantumEnergy < 25) return;
+            
+            quantumEnergy = Math.max(0, quantumEnergy - 25);
+            ab.cd = ab.maxCd;
+            
+            switch (ability) {
+                case 'teleport':
+                    player.x = mouse.x;
+                    player.y = mouse.y;
+                    createEffect('teleport', player.x, player.y);
+                    break;
+                case 'slowTime':
+                    timeScale = 0.3;
+                    ab.active = true;
+                    ab.duration = 2000;
+                    break;
+                case 'shield':
+                    ab.active = true;
+                    ab.duration = 3000;
+                    break;
+                case 'clone':
+                    player.clones = [];
                     for (let i = 0; i < 3; i++) {
-                        this.ctx.strokeStyle = `rgba(0, 255, 0, ${1 - i * 0.3})`;
-                        this.ctx.lineWidth = 3;
-                        this.ctx.beginPath();
-                        this.ctx.arc(this.target.x, this.target.y, size - i * 6, 0, Math.PI * 2);
-                        this.ctx.stroke();
+                        player.clones.push({
+                            x: player.x + (Math.random() - 0.5) * 100,
+                            y: player.y + (Math.random() - 0.5) * 100,
+                            lifetime: 4000
+                        });
+                    }
+                    break;
+                case 'magnet':
+                    ab.active = true;
+                    ab.duration = 3000;
+                    break;
+                case 'phase':
+                    ab.active = true;
+                    ab.duration = 2500;
+                    break;
+                case 'entangle':
+                    createEffect('entangle', player.x, player.y);
+                    break;
+                case 'collapse':
+                    obstacles.forEach(obs => {
+                        const dx = obs.x - player.x;
+                        const dy = obs.y - player.y;
+                        if (Math.sqrt(dx * dx + dy * dy) < 200) {
+                            obs.collapsing = true;
+                        }
+                    });
+                    createEffect('collapse', player.x, player.y);
+                    break;
+            }
+            updateAbilityUI();
+        }
+
+        function createEffect(type, x, y) {
+            effects.push({
+                x, y, type, age: 0, maxAge: 1000,
+                particles: Array.from({ length: 10 }, () => ({
+                    x, y,
+                    vx: (Math.random() - 0.5) * 5,
+                    vy: (Math.random() - 0.5) * 5,
+                    size: Math.random() * 4 + 2,
+                    alpha: 1
+                }))
+            });
+        }
+
+        function update(deltaTime) {
+            if (gameState !== 'playing') return;
+            
+            const dt = deltaTime * timeScale;
+            
+            // Update player
+            const speed = 0.4;
+            if (keys['w'] || keys['arrowup']) player.vy -= speed;
+            if (keys['s'] || keys['arrowdown']) player.vy += speed;
+            if (keys['a'] || keys['arrowleft']) player.vx -= speed;
+            if (keys['d'] || keys['arrowright']) player.vx += speed;
+            
+            player.vx *= 0.92;
+            player.vy *= 0.92;
+            
+            // Quantum uncertainty
+            const uncertainty = abilities.shield.active ? 0.5 : 1.5;
+            player.x += (Math.random() - 0.5) * uncertainty;
+            player.y += (Math.random() - 0.5) * uncertainty;
+            
+            player.x += player.vx * dt * 0.1;
+            player.y += player.vy * dt * 0.1;
+            
+            // Keep in bounds
+            player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x));
+            player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y));
+            
+            // Update trail
+            player.trail.push({ x: player.x, y: player.y, alpha: 1 });
+            if (player.trail.length > 15) player.trail.shift();
+            player.trail.forEach(point => point.alpha -= 0.07);
+            
+            player.wavePhase += dt * 0.01;
+            
+            // Update clones
+            player.clones.forEach((clone, i) => {
+                clone.lifetime -= dt;
+                if (clone.lifetime <= 0) player.clones.splice(i, 1);
+            });
+            
+            // Update obstacles
+            obstacles.forEach((obs, i) => {
+                obs.rotation += dt * 0.002;
+                obs.pulsePhase += dt * 0.005;
+                if (obs.collapsing) {
+                    obs.collapseTime -= dt;
+                    obs.radius *= 0.99;
+                    if (obs.collapseTime <= 0) obstacles.splice(i, 1);
+                }
+            });
+            
+            // Update powerups
+            powerups.forEach((pup, i) => {
+                pup.rotation += dt * 0.003;
+                pup.pulsePhase += dt * 0.008;
+                
+                // Magnet effect
+                if (abilities.magnet.active) {
+                    const dx = player.x - pup.x;
+                    const dy = player.y - pup.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < 200 && dist > 0) {
+                        pup.x += (dx / dist) * 2;
+                        pup.y += (dy / dist) * 2;
                     }
                 }
                 
-                // Effects
-                this.effects.forEach(effect => {
-                    effect.particles.forEach(p => {
-                        if (p.alpha > 0) {
-                            this.ctx.save();
-                            this.ctx.globalAlpha = p.alpha;
-                            this.ctx.fillStyle = '#00ffff';
-                            this.ctx.beginPath();
-                            this.ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-                            this.ctx.fill();
-                            this.ctx.restore();
-                        }
-                    });
+                if (checkCollision(player, pup)) {
+                    collectPowerup(pup);
+                    powerups.splice(i, 1);
+                }
+            });
+            
+            // Update target
+            target.pulsePhase += dt * 0.01;
+            if (Math.random() < 0.001) target.visible = Math.random() < 0.9;
+            
+            // Update abilities
+            Object.keys(abilities).forEach(key => {
+                const ab = abilities[key];
+                if (ab.cd > 0) ab.cd = Math.max(0, ab.cd - dt);
+                if (ab.active && ab.duration !== undefined) {
+                    ab.duration = Math.max(0, ab.duration - dt);
+                    if (ab.duration === 0) {
+                        ab.active = false;
+                        if (key === 'slowTime') timeScale = 1;
+                    }
+                }
+            });
+            
+            // Update effects
+            effects.forEach((effect, i) => {
+                effect.age += dt;
+                const progress = effect.age / effect.maxAge;
+                effect.particles.forEach(p => {
+                    p.x += p.vx * dt * 0.1;
+                    p.y += p.vy * dt * 0.1;
+                    p.alpha = 1 - progress;
+                });
+                if (effect.age > effect.maxAge) effects.splice(i, 1);
+            });
+            
+            // Check collisions
+            if (!abilities.phase.active && !abilities.shield.active) {
+                obstacles.forEach(obs => {
+                    if (checkCollision(player, obs)) gameOver();
                 });
             }
-
-            gameLoop() {
-                const currentTime = performance.now();
-                const deltaTime = currentTime - this.lastTime;
-                this.lastTime = currentTime;
-                
-                if (this.gameState === 'playing') {
-                    this.update(deltaTime);
-                    this.render();
-                }
-                
-                requestAnimationFrame(() => this.gameLoop());
+            
+            // Check target collision
+            if (target.visible && checkCollision(player, target)) {
+                levelComplete();
             }
+            
+            // Update UI
+            updateUI();
+            
+            // Regenerate energy
+            quantumEnergy = Math.min(100, quantumEnergy + dt * 0.02);
+            coherence = Math.max(60, coherence - dt * 0.01);
+        }
 
-            togglePause() {
-                if (this.gameState === 'playing') {
-                    this.gameState = 'paused';
-                    this.showNotification('PAUSED', 'Press ESC to resume');
-                } else if (this.gameState === 'paused') {
-                    this.gameState = 'playing';
-                    this.lastTime = performance.now(); // Reset timing to prevent delta spike
-                    document.getElementById('notification').classList.remove('show');
-                    // Don't call gameLoop() again - it will resume automatically
+        function checkCollision(obj1, obj2) {
+            const dx = obj1.x - obj2.x;
+            const dy = obj1.y - obj2.y;
+            return Math.sqrt(dx * dx + dy * dy) < obj1.radius + obj2.radius;
+        }
+
+        function collectPowerup(pup) {
+            score += 100;
+            switch (pup.type) {
+                case 'energy': quantumEnergy = Math.min(100, quantumEnergy + 30); break;
+                case 'shield': abilities.shield.active = true; abilities.shield.duration = 2000; break;
+                case 'speed': coherence = Math.min(100, coherence + 20); break;
+            }
+            createEffect('collect', pup.x, pup.y);
+        }
+
+        function levelComplete() {
+            level++;
+            score += 500 * level;
+            gameState = 'levelcomplete';
+            showNotification('QUANTUM STATE ACHIEVED!', `Level ${level - 1} complete! Score: ${Math.floor(score)}`);
+        }
+
+        function nextLevel() {
+            resetPlayer();
+            generateLevel();
+            gameState = 'playing';
+            gameLoop();
+        }
+
+        function gameOver() {
+            gameState = 'gameover';
+            showNotification('QUANTUM DECOHERENCE', `Wave function collapsed! Final Score: ${Math.floor(score)}`);
+        }
+
+        function resetGame() {
+            gameState = 'menu';
+            score = 0;
+            level = 1;
+            quantumEnergy = 100;
+            coherence = 100;
+            timeScale = 1;
+            resetPlayer();
+            showMainMenu();
+        }
+
+        function showNotification(title, text) {
+            document.getElementById('notificationTitle').textContent = title;
+            document.getElementById('notificationText').textContent = text;
+            document.getElementById('notification').classList.add('show');
+        }
+
+        function updateAbilityUI() {
+            const btns = ['teleport', 'slowTime', 'shield', 'clone', 'magnet', 'phase', 'entangle', 'collapse'];
+            btns.forEach(ability => {
+                const btn = document.getElementById(ability + 'Btn');
+                const ab = abilities[ability];
+                btn.classList.toggle('cooldown', ab.cd > 0 || quantumEnergy < 25);
+                btn.classList.toggle('active', ab.active || (ability === 'clone' && player.clones.length > 0));
+            });
+        }
+
+        function updateUI() {
+            document.getElementById('scoreDisplay').textContent = Math.floor(score);
+            document.getElementById('levelDisplay').textContent = level;
+            document.getElementById('energyDisplay').textContent = Math.floor(quantumEnergy) + '%';
+            document.getElementById('quantumFill').style.width = quantumEnergy + '%';
+            document.getElementById('coherenceDisplay').textContent = Math.floor(coherence) + '%';
+        }
+
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (gameState !== 'playing') return;
+            
+            // Player trail
+            player.trail.forEach(point => {
+                if (point.alpha > 0) {
+                    ctx.save();
+                    ctx.globalAlpha = point.alpha;
+                    ctx.fillStyle = '#00ffff';
+                    ctx.beginPath();
+                    ctx.arc(point.x, point.y, player.radius * 0.3, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
                 }
+            });
+            
+            // Player wave function
+            ctx.save();
+            ctx.globalAlpha = 0.3;
+            ctx.strokeStyle = '#00ffff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius + 10 + Math.sin(player.wavePhase) * 5, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+            
+            // Player
+            const gradient = ctx.createRadialGradient(player.x, player.y, 0, player.x, player.y, player.radius);
+            gradient.addColorStop(0, '#ffffff');
+            gradient.addColorStop(0.7, '#00ffff');
+            gradient.addColorStop(1, 'transparent');
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Shield effect
+            if (abilities.shield.active) {
+                ctx.save();
+                ctx.globalAlpha = 0.6;
+                ctx.strokeStyle = '#ffff00';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(player.x, player.y, player.radius + 15, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.restore();
+            }
+            
+            // Clones
+            player.clones.forEach(clone => {
+                ctx.save();
+                ctx.globalAlpha = clone.lifetime / 4000 * 0.6;
+                ctx.fillStyle = '#ff00ff';
+                ctx.beginPath();
+                ctx.arc(clone.x, clone.y, 8, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            });
+            
+            // Obstacles
+            obstacles.forEach(obs => {
+                ctx.save();
+                ctx.translate(obs.x, obs.y);
+                ctx.rotate(obs.rotation);
+                
+                if (obs.collapsing) ctx.globalAlpha = obs.collapseTime / 1000;
+                
+                const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, obs.radius);
+                grad.addColorStop(0, '#000000');
+                grad.addColorStop(0.6, '#330000');
+                grad.addColorStop(1, '#ff0000');
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(0, 0, obs.radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.strokeStyle = '#ff6600';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(0, 0, obs.radius + 5 + Math.sin(obs.pulsePhase) * 3, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.restore();
+            });
+            
+            // Powerups
+            powerups.forEach(pup => {
+                ctx.save();
+                ctx.translate(pup.x, pup.y);
+                ctx.rotate(pup.rotation);
+                
+                const colors = { energy: '#00ffff', shield: '#ffff00', speed: '#ff8000' };
+                const size = pup.radius + Math.sin(pup.pulsePhase) * 3;
+                
+                const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, size);
+                grad.addColorStop(0, '#ffffff');
+                grad.addColorStop(0.7, colors[pup.type]);
+                grad.addColorStop(1, 'transparent');
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(0, 0, size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            });
+            
+            // Target
+            if (target.visible) {
+                const size = target.radius + Math.sin(target.pulsePhase) * 5;
+                
+                const grad = ctx.createRadialGradient(target.x, target.y, 0, target.x, target.y, size * 2);
+                grad.addColorStop(0, 'rgba(0, 255, 0, 0.8)');
+                grad.addColorStop(0.5, 'rgba(0, 255, 0, 0.3)');
+                grad.addColorStop(1, 'transparent');
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(target.x, target.y, size * 2, 0, Math.PI * 2);
+                ctx.fill();
+                
+                for (let i = 0; i < 3; i++) {
+                    ctx.strokeStyle = `rgba(0, 255, 0, ${1 - i * 0.3})`;
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.arc(target.x, target.y, size - i * 6, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+            }
+            
+            // Effects
+            effects.forEach(effect => {
+                effect.particles.forEach(p => {
+                    if (p.alpha > 0) {
+                        ctx.save();
+                        ctx.globalAlpha = p.alpha;
+                        ctx.fillStyle = '#00ffff';
+                        ctx.beginPath();
+                        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.restore();
+                    }
+                });
+            });
+        }
+
+        function gameLoop() {
+            if (gameState !== 'playing') return;
+            
+            const currentTime = performance.now();
+            const deltaTime = currentTime - lastTime;
+            lastTime = currentTime;
+            
+            update(deltaTime);
+            render();
+            
+            animationId = requestAnimationFrame(gameLoop);
+        }
+
+        function togglePause() {
+            if (gameState === 'playing') {
+                gameState = 'paused';
+                showNotification('PAUSED', 'Press ESC to resume');
+            } else if (gameState === 'paused') {
+                gameState = 'playing';
+                document.getElementById('notification').classList.remove('show');
+                lastTime = performance.now();
+                gameLoop();
             }
         }
 
         // Initialize game
-        const game = new QuantumGame();
+        setupControls();
+        generateLevel();
+        console.log('Quantum Nexus initialized successfully!');
     </script>
 </body>
 </html>
